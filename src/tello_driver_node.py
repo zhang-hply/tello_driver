@@ -259,7 +259,7 @@ class TelloNode(tello.Tello):
             except BaseException as err:
                 rospy.logerr('fgrab: pyav stream failed - %s' % str(err))
                 time.sleep(1.0)
-
+        
         # Once connected, process frames till drone/stream closes
         while self.state != self.STATE_QUIT:
             try:
@@ -280,8 +280,8 @@ class TelloNode(tello.Tello):
                     self.pub_caminfo.publish(self.caminfo)                    
                 break
             except BaseException as err:
-                rospy.logerr('fgrab: pyav decoder failed - %s' % str(err))
-
+                rospy.logerr('fgrab: pyav decoder failed - %s' % str(err))                
+            
     def cb_dyncfg(self, config, level):
         update_all = False
         req_sps_pps = False
@@ -294,6 +294,8 @@ class TelloNode(tello.Tello):
             req_sps_pps = True
         if update_all or self.cfg.vel_cmd_limit != config.vel_cmd_limit:
             self.vel_cmd_limit = config.vel_cmd_limit
+        if update_all or self.cfg.vel_cmd_scale != config.vel_cmd_scale:
+            self.vel_cmd_scale = config.vel_cmd_scale        
         
         self.cfg = config
         return self.cfg
