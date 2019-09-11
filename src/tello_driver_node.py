@@ -23,6 +23,17 @@ from tellopy._internal import error
 from tellopy._internal import protocol
 from tellopy._internal import logger
 
+def euler_to_quaternion(pitch, roll, yaw):
+        pitch = math.radians(pitch)
+        roll = math.radians(roll)
+        yaw = math.radians(yaw)
+        
+        qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+        qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+        qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+        qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+
+        return [qw, qx, qy, qz]
 
 class RospyLogger(logger.Logger):
     def __init__(self, header=''):
@@ -70,6 +81,8 @@ class TelloNode(tello.Tello):
             rospy.get_param('~connect_timeout_sec', 10.0))
         self.stream_h264_video = bool(
             rospy.get_param('~stream_h264_video', False))
+        self.tello_sdk = bool(
+            rospy.get_param('~tello_sdk', True))            
         self.bridge = CvBridge()
         self.frame_thread = None
         self.cam_fps = rospy.get_param('~cam_fps', 40)      
@@ -86,6 +99,7 @@ class TelloNode(tello.Tello):
             local_vid_server_port=self.local_vid_server_port,
             tello_ip=self.tello_ip,
             tello_cmd_server_port=self.tello_cmd_server_port,
+            tello_sdk = self.tello_sdk,
             log=log)
         rospy.loginfo('Connecting to drone @ %s:%d' % self.tello_addr)
         self.connect()
@@ -137,8 +151,12 @@ class TelloNode(tello.Tello):
             self.start_video()
             self.subscribe(self.EVENT_VIDEO_FRAME, self.cb_h264_frame)
         else:
-            self.frame_thread = threading.Thread(target=self.framegrabber_loop)
-            self.frame_thread.start()
+            if self.tello_sdk:
+                self.stream_on()
+                self.subscribe(self.EVENT_VIDEO_FRAME, self.cb_frame)
+            else:
+                self.frame_thread = threading.Thread(target=self.framegrabber_loop)
+                self.frame_thread.start()            
 
         # NOTE: odometry from parsing logs might be possible eventually,
         #       but it is unclear from tests what's being sent by Tello
@@ -158,6 +176,8 @@ class TelloNode(tello.Tello):
             self.frame_thread.join()
 
     def cb_status_log(self, event, sender, data, **args):
+        if self.tello_sdk:
+            data.imu.q0, data.imu.q1, data.imu.q2, data.imu.q3 = euler_to_quaternion(data.imu.gyro_x, data.imu.gyro_y, data.imu.gyro_z)
 
         ### Odometry message
         msg = Odometry()
@@ -239,16 +259,17 @@ class TelloNode(tello.Tello):
         password = 'qwertyuiop'
         success = self.connect_to_ap(ssid, password)
         notify_cmd_success('Connect ap', success)
-
-    def cb_h264_frame(self, event, sender, data, **args):
-        frame, seq_id, frame_secs = data
-        pkt_msg = H264Packet()
-        pkt_msg.header.seq = seq_id
-        pkt_msg.header.frame_id = rospy.get_namespace()
-        pkt_msg.header.stamp = rospy.Time.from_sec(frame_secs)
-        pkt_msg.data = frame
-        self.pub_image_h264.publish(pkt_msg)
-
+    
+    def cb_frame(self, event, sender, data, **args):
+        stamp = rospy.Time.now()
+        img_msg = self.bridge.cv2_to_imgmsg(data, 'rgb8')
+        img_msg.header.frame_id = rospy.get_namespace()
+        img_msg.header.stamp = stamp        
+        self.pub_image_raw.publish(img_msg)
+                    
+        self.caminfo.header.stamp = stamp
+        self.pub_caminfo.publish(self.caminfo)                    
+        
     def framegrabber_loop(self):
         # Repeatedly try to connect
         vs = self.get_video_stream()
@@ -262,9 +283,14 @@ class TelloNode(tello.Tello):
         
         # Once connected, process frames till drone/stream closes
         while self.state != self.STATE_QUIT:
+            # skip first 300 frames
+            frame_skip = 300
             try:
                 # vs blocks, dies on self.stop
                 for frame in container.decode(video=0):
+                    if 0 < frame_skip:
+                        frame_skip = frame_skip -1
+                        continue            
                     img = np.array(frame.to_image())
                     try:
                         stamp = rospy.Time.now()
