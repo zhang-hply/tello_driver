@@ -187,11 +187,39 @@ class TelloNode(tello.Tello):
         
 ###########################################END#####################################
 
-        rospy.loginfo('Tello driver node ready')        
+        rospy.loginfo('Tello driver node ready')
+        
+        self.query_attitude_limit()
+        self.set_attitude_limit(10)
+        self.query_attitude_limit()
 
 ###########################################BEGIN###################################
 
-## Add 'Tello' compositions, leave 'TelloPy' package untouched (Jordy) ##        
+## Add 'Tello' compositions, leave 'TelloPy' package untouched (Jordy) ##
+        
+    def query_attitude_limit(self):
+        """..."""
+        self.log.info('query attitude limit (cmd=0x%02x seq=0x%04x)' % (
+            ATTITUDE_MSG, self.pkt_seq_num))
+        pkt = Packet(ATTITUDE_MSG)
+        pkt.fixup()
+        return self.send_packet(pkt)     
+
+    def set_fast_mode(self, enabled):
+        self.fast_mode = enabled
+        
+    # attitude limit command
+    def __send_attitude_limit(self, limit):
+        pkt = Packet(ATTITUDE_LIMIT_CMD)
+        pkt.add_byte(limit)
+        pkt.fixup()
+        return self.send_packet(pkt)        
+
+    def set_attitude_limit(self, limit):
+        """..."""
+        self.log.info('set attitude limit=%s (cmd=0x%02x seq=0x%04x)' % (
+            limit, ATTITUDE_LIMIT_CMD, self.pkt_seq_num))
+        return self.__send_attitude_limit(int(limit))
         
     def reset_cmd_vel(self):
         self.left_x = 0.
@@ -354,6 +382,8 @@ class TelloNode(tello.Tello):
             req_sps_pps = True
         if update_all or self.cfg.vel_cmd_scale != config.vel_cmd_scale:
             self.vel_cmd_scale = config.vel_cmd_scale
+        if update_all or self.cfg.att_limit != config.att_limit:
+            self.set_attitude_limit(config.att_limit)
         if req_sps_pps:
             self.send_req_video_sps_pps()
 
